@@ -1,0 +1,25 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "snerdmq-python"
+version = "1.0.0"
+authors = [
+  { name="Greyhands2" },
+]
+description = "The official Python SDK for SnerdMQ. Execute robust, C-speed background jobs in Python without Redis, Celery, or complex config."
+readme = "README.md"
+requires-python = ">=3.8"
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+]
+
+[project.scripts]
+snerdmq-install = "snerdmq.install:main"
+
+[project.urls]
+"Homepage" = "https://github.com/greyhands2/snerdmq-python"
+"Bug Tracker" = "https://github.com/greyhands2/snerdmq-python/issues"

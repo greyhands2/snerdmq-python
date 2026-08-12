@@ -1,0 +1,14 @@
+Metadata-Version: 2.4
+Name: snerdmq-python
+Version: 1.0.0
+Summary: The official Python SDK for SnerdMQ. Execute robust, C-speed background jobs in Python without Redis, Celery, or complex config.
+Author: Greyhands2
+Project-URL: Homepage, https://github.com/greyhands2/snerdmq-python
+Project-URL: Bug Tracker, https://github.com/greyhands2/snerdmq-python/issues
+Classifier: Programming Language :: Python :: 3
+Classifier: License :: OSI Approved :: MIT License
+Classifier: Operating System :: OS Independent
+Requires-Python: >=3.8
+Description-Content-Type: text/markdown
+
+# snerdmq-python

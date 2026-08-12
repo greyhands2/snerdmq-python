@@ -1,1 +1,87 @@
-# snerdmq-python
+<div align="center">
+  <h1>🚀 SnerdMQ Python SDK</h1>
+  <p>The official Python SDK for SnerdMQ. Execute robust, C-speed background jobs in Python without Redis, Celery, or complex config.</p>
+
+  [![PyPI version](https://img.shields.io/pypi/v/snerdmq-python)](https://pypi.org/project/snerdmq-python)
+  [![License](https://img.shields.io/pypi/l/snerdmq-python)](https://github.com/greyhands2/snerdmq-python/blob/main/LICENSE)
+</div>
+
+This is the official Python client for **SnerdMQ**. It acts as a lightweight, elegant wrapper over the underlying Rust background daemon. It handles all JSON-RPC communication, standard I/O piping, and event loop orchestration so you can write background jobs natively in Python using `asyncio`.
+
+## ✨ Features
+- **The Celery Killer**: No Redis, no RabbitMQ, no ports, no messy worker nodes. Just start enqueuing jobs.
+- **Zero Rust Required**: Our CLI tool automatically downloads the pre-compiled C-speed Rust binary for your OS.
+- **Native Asyncio**: Written to seamlessly integrate with modern Python `async/await` applications (like FastAPI or Sanic).
+
+## 📦 Installation
+
+Installing the SDK is a simple two-step process:
+
+**1. Install the package via pip:**
+```bash
+pip install snerdmq-python
+```
+
+**2. Download the Rust Engine:**
+Because modern Python Wheels discourage arbitrary post-install scripts, we provide a clean CLI tool. Run this immediately after pip installing to fetch the correct SnerdMQ binary for your operating system (macOS/Linux/Windows):
+```bash
+snerdmq-install
+```
+
+---
+
+## ⚡ Quickstart
+
+Using the SDK is incredibly simple. Initialize the queue, register your async handlers, and start the event loop!
+
+```python
+import asyncio
+from snerdmq import SnerdQueue
+
+async def send_email(data):
+    print(f"Sending email to {data['to']} with subject: {data['subject']}...")
+    # ... your logic here (e.g., hitting SendGrid API)
+
+async def main():
+    # 1. Initialize the daemon in the background
+    queue = SnerdQueue()
+
+    # 2. Register your background job logic
+    queue.register_handler('send_email', send_email)
+
+    # 3. Enqueue a job from anywhere in your codebase
+    await queue.enqueue(
+        task_id='email-123',
+        task_type='send_email',
+        data={'to': 'john@wick.com', 'subject': 'Continental Update'},
+        max_retries=3
+    )
+
+    # 4. Start the event loop (listens to the Rust daemon indefinitely)
+    print("SnerdMQ Python SDK is listening for jobs...")
+    await queue.start_listening()
+
+if __name__ == "__main__":
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        print("Shutting down gracefully...")
+```
+
+---
+
+## 🌍 Advanced: Distributed Scaling
+
+By default, the SDK spins up the Rust daemon which writes the queue to a local file (`.snerdata/tasks/tasks.log`). 
+
+If you have multiple Python servers (like Gunicorn/Uvicorn workers) running behind a load balancer and want them to share the exact same queue, simply mount a **Shared Network Drive** (like AWS EFS or NFS) to all of your servers and pass the shared path into the `SnerdQueue` constructor:
+
+```python
+from snerdmq import SnerdQueue
+
+# All 10 of your Python servers point to the exact same shared file!
+# SnerdMQ's native OS file-locking guarantees zero data corruption.
+queue = SnerdQueue(storage_path='/mnt/aws-efs-shared-drive/snerd_tasks.log')
+```
+
+*Built with ❤️ for John Wick tier engineering.*
