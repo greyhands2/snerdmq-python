@@ -117,19 +117,26 @@ class SnerdQueue:
         if self.process:
             asyncio.create_task(self._send({"action": "register", "task_type": task_type}))
 
-    async def enqueue(self, task_id: str, task_type: str, data: Any, max_retries: int = 3, retry_after_hours: float = 0.0):
+    async def enqueue(self, task_id: str, task_type: str, data: Any, max_retries: int = 3, retry_after_hours: float = 0.0, rate_limit_group: Optional[str] = None, max_per_minute: Optional[int] = None):
         """Enqueues a new background job."""
         if not self.process:
             raise RuntimeError("[Snerd] Cannot enqueue task: Queue is not running. Call start_listening() first.")
         
-        await self._send({
+        payload = {
             'action': 'enqueue',
             'task_id': task_id,
             'task_type': task_type,
             'task_data': json.dumps(data),
             'max_retries': max_retries,
             'retry_after_hours': retry_after_hours
-        })
+        }
+
+        if rate_limit_group is not None:
+            payload['rate_limit_group'] = rate_limit_group
+        if max_per_minute is not None:
+            payload['max_per_minute'] = max_per_minute
+
+        await self._send(payload)
 
     def shutdown(self):
         """Gracefully kills the Rust daemon."""
