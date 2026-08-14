@@ -1,5 +1,6 @@
 <div align="center">
-  <h1>🚀 SnerdMQ Python SDK</h1>
+  <img src="./assets/Designer-9.png" height="120" alt="SnerdMQ Python Logo" />
+  <h1>🚀 SnerdMQ Python SDK v0.2.0</h1>
   <p>The official Python SDK for SnerdMQ. Execute robust, C-speed background jobs in Python without Redis, Celery, or complex config.</p>
 
   [![PyPI version](https://img.shields.io/pypi/v/snerdmq-python)](https://pypi.org/project/snerdmq-python)
@@ -8,10 +9,21 @@
 
 This is the official Python client for **SnerdMQ**. It acts as a lightweight, elegant wrapper over the underlying Rust background daemon. It handles all JSON-RPC communication, standard I/O piping, and event loop orchestration so you can write background jobs natively in Python using `asyncio`.
 
-## ✨ Features
+## ✨ v0.2.0 AI-Era Features
+- **Smart API Rate-Limiting**: Natively tracks `rate_limit_group` execution velocity to prevent 429 "Too Many Requests" API errors.
+- **Payload-Hashing Deduplication**: Automatically computes cryptographic hashes to drop duplicate tasks instantly.
+- **Dynamic Float Prioritization**: A native Binary Max-Heap bypasses standard FIFO rules for high urgency tasks.
 - **The Celery Killer**: No Redis, no RabbitMQ, no ports, no messy worker nodes. Just start enqueuing jobs.
 - **Zero Rust Required**: Our CLI tool automatically downloads the pre-compiled C-speed Rust binary for your OS.
 - **Native Asyncio**: Written to seamlessly integrate with modern Python `async/await` applications (like FastAPI or Sanic).
+
+### ⚙️ Advanced Task Configuration (v0.2.0)
+To power complex AI workflows, tasks can now be configured with advanced orchestration parameters:
+
+* **`auto_dedupe` (`bool`)**: If set to `True`, the daemon computes a cryptographic hash of the `task_type` and `data`. If an identical payload is currently sitting in the queue pending execution, this new task is silently dropped. Excellent for preventing duplicate generative AI requests from trigger-happy users!
+* **`urgency_score` (`float`)**: A value (e.g. `0.99`) used to bypass the standard FIFO queue. SnerdMQ uses a true Binary Max-Heap to continually float tasks with the highest urgency score to the very front of the execution line. Standard tasks default to `0.0`.
+* **`rate_limit_group` (`str`)**: A custom string (e.g. `"openai_api"` or `"db_writes"`) that groups tasks together for backpressure control.
+* **`max_per_minute` (`int`)**: Used in conjunction with `rate_limit_group`. If the queue processes more tasks in this group than the allowed limit within a 60-second rolling window, further tasks in this group are temporarily paused. This natively prevents 429 "Too Many Requests" errors when bursting third-party APIs.
 
 ## 📦 Installation
 
@@ -49,12 +61,16 @@ async def main():
     # 2. Register your background job logic
     queue.register_handler('send_email', send_email)
 
-    # 3. Enqueue a job from anywhere in your codebase
+    # 3. Enqueue a job from anywhere in your codebase (Now with v0.2.0 AI Features!)
     await queue.enqueue(
         task_id='email-123',
         task_type='send_email',
         data={'to': 'john@wick.com', 'subject': 'Continental Update'},
-        max_retries=3
+        max_retries=3,
+        rate_limit_group='email_api',
+        max_per_minute=100,
+        auto_dedupe=True,
+        urgency_score=0.99
     )
 
     # 4. Start the event loop (listens to the Rust daemon indefinitely)

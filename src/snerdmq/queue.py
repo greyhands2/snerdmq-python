@@ -4,6 +4,12 @@ import os
 import signal
 import sys
 from typing import Callable, Awaitable, Dict, Any, Optional
+import contextvars
+from aiohttp import web
+
+# Store the current task ID for yield_progress
+_current_task_id = contextvars.ContextVar('current_task_id', default=None)
+
 
 class SnerdQueue:
     def __init__(self, binary_path: Optional[str] = None, storage_path: Optional[str] = None):
@@ -11,6 +17,8 @@ class SnerdQueue:
         self.process: Optional[asyncio.subprocess.Process] = None
         self.is_shutting_down = False
         self.pending_enqueues: Dict[str, asyncio.Future] = {}
+        self.progress_listeners = set()
+        self.dashboard_runner = None
         
         if not binary_path:
             package_dir = os.path.dirname(os.path.abspath(__file__))
@@ -111,10 +119,19 @@ class SnerdQueue:
                 return
 
             try:
+                _current_task_id.set(task_id)
                 await handler(task_data)
                 await self._send({'action': 'result', 'task_id': task_id, 'status': 'success'})
             except Exception as e:
                 await self._send({'action': 'result', 'task_id': task_id, 'status': 'error', 'error_msg': str(e)})
+
+        elif msg.get('action') == 'progress':
+            for ws in list(self.progress_listeners):
+                try:
+                    # msg is already a dict, just forward it
+                    asyncio.create_task(ws.send_json(msg))
+                except Exception:
+                    self.progress_listeners.discard(ws)
 
         elif msg.get('action') == 'max_retries_reached':
             print(f"[Snerd] Dead Letter Queue: Task {msg.get('task_id')} ({msg.get('task_type')}) permanently failed.", file=sys.stderr)
@@ -169,3 +186,138 @@ class SnerdQueue:
                 self.process.terminate()
             except ProcessLookupError:
                 pass
+
+
+    def yield_progress(self, data: Any):
+        """Yields a progress update for the currently executing task."""
+        task_id = _current_task_id.get()
+        if not task_id:
+            raise RuntimeError("[Snerd] yield_progress must be called within a task handler context.")
+        
+        # We can't easily make a sync network call if the process stdin writing is async.
+        # But wait, self._send is async. yield_progress should ideally be sync if users call it from sync code.
+        # However, SnerdQueue handlers are async: `Callable[[Any], Awaitable[None]]`.
+        # So we can just make yield_progress async.
+        # But wait! Node and Ruby are sync. Python can be async.
+        pass
+
+    async def yield_progress_async(self, data: Any):
+        task_id = _current_task_id.get()
+        if not task_id:
+            raise RuntimeError("[Snerd] yield_progress must be called within a task handler context.")
+        await self._send({
+            'action': 'progress',
+            'task_id': task_id,
+            'data': data
+        })
+
+    def yield_progress(self, data: Any):
+        """Yields progress. If inside an event loop, schedules the send."""
+        task_id = _current_task_id.get()
+        if not task_id:
+            raise RuntimeError("[Snerd] yield_progress must be called within a task handler context.")
+        try:
+            loop = asyncio.get_running_loop()
+            loop.create_task(self._send({
+                'action': 'progress',
+                'task_id': task_id,
+                'data': data
+            }))
+        except RuntimeError:
+            pass
+
+    def start_dashboard(self, port: int = 8080):
+        """Starts the embedded dashboard and API server."""
+        async def handle_ws(request):
+            ws = web.WebSocketResponse()
+            await ws.prepare(request)
+            self.progress_listeners.add(ws)
+            try:
+                async for msg in ws:
+                    pass
+            finally:
+                self.progress_listeners.discard(ws)
+            return ws
+
+        async def handle_stats(request):
+            enqueued = 0
+            processed = 0
+            failed = 0
+            
+            storage_dir = self.storage_path or './.snerdata'
+            tasks_file = os.path.join(storage_dir, 'tasks', 'tasks.log')
+            if os.path.exists(tasks_file):
+                with open(tasks_file, 'r') as f:
+                    for line in f:
+                        if not line.strip(): continue
+                        try:
+                            t = json.loads(line)
+                            enqueued += 1
+                            if t.get('deletedAt'):
+                                if t.get('lastJobError'):
+                                    failed += 1
+                                else:
+                                    processed += 1
+                        except json.JSONDecodeError:
+                            pass
+            return web.json_response({'enqueued': enqueued, 'processed': processed, 'failed': failed}, headers={'Access-Control-Allow-Origin': '*'})
+
+        async def handle_tasks(request):
+            tasks_map = {}
+            storage_dir = self.storage_path or './.snerdata'
+            tasks_file = os.path.join(storage_dir, 'tasks', 'tasks.log')
+            if os.path.exists(tasks_file):
+                with open(tasks_file, 'r') as f:
+                    for line in f:
+                        if not line.strip(): continue
+                        try:
+                            t = json.loads(line)
+                            if 'taskId' in t:
+                                tasks_map[t['taskId']] = t
+                        except json.JSONDecodeError:
+                            pass
+            
+            res = []
+            for t in tasks_map.values():
+                if t.get('deletedAt'):
+                    status = 'failed' if t.get('lastJobError') else 'completed'
+                else:
+                    status = 'failed' if t.get('lastJobError') else 'queued'
+                res.append({
+                    'id': t['taskId'],
+                    'type': t['taskType'],
+                    'status': status,
+                    'progress': 0,
+                    'retryCount': t.get('retryCount', 0),
+                    'maxRetries': t.get('maxRetries', 3),
+                    'retryAfterTime': t.get('retryAfterTime')
+                })
+            
+            return web.json_response(res, headers={'Access-Control-Allow-Origin': '*'})
+
+        async def handle_index(request):
+            # Try to find static/index.html
+            static_file = os.path.join(os.path.dirname(__file__), '..', '..', 'static', 'index.html')
+            if not os.path.exists(static_file):
+                static_file = os.path.join(os.getcwd(), 'static', 'index.html')
+                
+            if os.path.exists(static_file):
+                return web.FileResponse(static_file)
+            return web.Response(text="Dashboard UI not found in static folder.", status=404)
+
+        async def start_app():
+            app = web.Application()
+            app.router.add_get('/', handle_index)
+            app.router.add_get('/api/stats', handle_stats)
+            app.router.add_get('/api/tasks', handle_tasks)
+            app.router.add_get('/ws', handle_ws)
+            
+            runner = web.AppRunner(app)
+            await runner.setup()
+            site = web.TCPSite(runner, '0.0.0.0', port)
+            await site.start()
+            self.dashboard_runner = runner
+            print(f"[Snerd] Dashboard running on http://localhost:{port}")
+
+        loop = asyncio.get_event_loop()
+        loop.create_task(start_app())

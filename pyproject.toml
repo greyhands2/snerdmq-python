@@ -4,13 +4,16 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "snerdmq-python"
-version = "1.0.0"
+version = "0.2.0"
 authors = [
   { name="Greyhands2" },
 ]
 description = "The official Python SDK for SnerdMQ. Execute robust, C-speed background jobs in Python without Redis, Celery, or complex config."
 readme = "README.md"
 requires-python = ">=3.8"
+dependencies = [
+    "aiohttp>=3.8.0"
+]
 classifiers = [
     "Programming Language :: Python :: 3",
     "License :: OSI Approved :: MIT License",
