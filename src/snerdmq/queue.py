@@ -130,7 +130,7 @@ class SnerdQueue:
         if self.process:
             asyncio.create_task(self._send({"action": "register", "task_type": task_type}))
 
-    async def enqueue(self, task_id: str, task_type: str, data: Any, max_retries: int = 3, retry_after_hours: float = 0.0, rate_limit_group: Optional[str] = None, max_per_minute: Optional[int] = None, auto_dedupe: Optional[bool] = None):
+    async def enqueue(self, task_id: str, task_type: str, data: Any, max_retries: int = 3, retry_after_hours: float = 0.0, rate_limit_group: Optional[str] = None, max_per_minute: Optional[int] = None, auto_dedupe: Optional[bool] = None, urgency_score: Optional[float] = None):
         """Enqueues a new background job."""
         if not self.process:
             raise RuntimeError("[Snerd] Cannot enqueue task: Queue is not running. Call start_listening() first.")
@@ -150,6 +150,8 @@ class SnerdQueue:
             payload['max_per_minute'] = max_per_minute
         if auto_dedupe is not None:
             payload['auto_dedupe'] = auto_dedupe
+        if urgency_score is not None:
+            payload['urgency_score'] = urgency_score
 
         loop = asyncio.get_running_loop()
         future = loop.create_future()
