@@ -10,6 +10,7 @@ class SnerdQueue:
         self.handlers: Dict[str, Callable[[Any], Awaitable[None]]] = {}
         self.process: Optional[asyncio.subprocess.Process] = None
         self.is_shutting_down = False
+        self.pending_enqueues: Dict[str, asyncio.Future] = {}
         
         if not binary_path:
             package_dir = os.path.dirname(os.path.abspath(__file__))
@@ -81,7 +82,19 @@ class SnerdQueue:
             print(f"[Snerd Engine Error]: {line.decode().strip()}", file=sys.stderr)
 
     async def _handle_engine_message(self, msg: dict):
-        if msg.get('action') == 'execute':
+        if msg.get('action') == 'ack':
+            task_id = msg.get('task_id')
+            if task_id and task_id in self.pending_enqueues:
+                self.pending_enqueues[task_id].set_result(None)
+                del self.pending_enqueues[task_id]
+        elif msg.get('action') == 'error':
+            task_id = msg.get('task_id')
+            if task_id and task_id in self.pending_enqueues:
+                self.pending_enqueues[task_id].set_exception(RuntimeError(msg.get('message')))
+                del self.pending_enqueues[task_id]
+            else:
+                print(f"[Snerd] Error from engine: {msg.get('message')}", file=sys.stderr)
+        elif msg.get('action') == 'execute':
             task_type = msg.get('task_type')
             task_id = msg.get('task_id')
             task_data = msg.get('task_data')
@@ -117,7 +130,7 @@ class SnerdQueue:
         if self.process:
             asyncio.create_task(self._send({"action": "register", "task_type": task_type}))
 
-    async def enqueue(self, task_id: str, task_type: str, data: Any, max_retries: int = 3, retry_after_hours: float = 0.0, rate_limit_group: Optional[str] = None, max_per_minute: Optional[int] = None):
+    async def enqueue(self, task_id: str, task_type: str, data: Any, max_retries: int = 3, retry_after_hours: float = 0.0, rate_limit_group: Optional[str] = None, max_per_minute: Optional[int] = None, auto_dedupe: Optional[bool] = None):
         """Enqueues a new background job."""
         if not self.process:
             raise RuntimeError("[Snerd] Cannot enqueue task: Queue is not running. Call start_listening() first.")
@@ -135,8 +148,14 @@ class SnerdQueue:
             payload['rate_limit_group'] = rate_limit_group
         if max_per_minute is not None:
             payload['max_per_minute'] = max_per_minute
+        if auto_dedupe is not None:
+            payload['auto_dedupe'] = auto_dedupe
 
+        loop = asyncio.get_running_loop()
+        future = loop.create_future()
+        self.pending_enqueues[task_id] = future
         await self._send(payload)
+        await future
 
     def shutdown(self):
         """Gracefully kills the Rust daemon."""
