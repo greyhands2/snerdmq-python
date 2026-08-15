@@ -1,6 +1,6 @@
 <div align="center">
   <img src="./assets/Designer-9.png" height="120" alt="SnerdMQ Python Logo" />
-  <h1>🚀 SnerdMQ Python SDK v0.2.0</h1>
+  <h1>🚀 SnerdMQ Python SDK v0.2.1</h1>
   <p>The official Python SDK for SnerdMQ. Execute robust, C-speed background jobs in Python without Redis, Celery, or complex config.</p>
 
   [![PyPI version](https://img.shields.io/pypi/v/snerdmq-python)](https://pypi.org/project/snerdmq-python)
@@ -9,7 +9,7 @@
 
 This is the official Python client for **SnerdMQ**. It acts as a lightweight, elegant wrapper over the underlying Rust background daemon. It handles all JSON-RPC communication, standard I/O piping, and event loop orchestration so you can write background jobs natively in Python using `asyncio`.
 
-## ✨ v0.2.0 AI-Era Features
+## ✨ v0.2.1 AI-Era Features
 - **Smart API Rate-Limiting**: Natively tracks `rate_limit_group` execution velocity to prevent 429 "Too Many Requests" API errors.
 - **Payload-Hashing Deduplication**: Automatically computes cryptographic hashes to drop duplicate tasks instantly.
 - **Dynamic Float Prioritization**: A native Binary Max-Heap bypasses standard FIFO rules for high urgency tasks.
@@ -17,7 +17,7 @@ This is the official Python client for **SnerdMQ**. It acts as a lightweight, el
 - **Zero Rust Required**: Our CLI tool automatically downloads the pre-compiled C-speed Rust binary for your OS.
 - **Native Asyncio**: Written to seamlessly integrate with modern Python `async/await` applications (like FastAPI or Sanic).
 
-### ⚙️ Advanced Task Configuration (v0.2.0)
+### ⚙️ Advanced Task Configuration (v0.2.1)
 To power complex AI workflows, tasks can now be configured with advanced orchestration parameters:
 
 * **`auto_dedupe` (`bool`)**: If set to `True`, the daemon computes a cryptographic hash of the `task_type` and `data`. If an identical payload is currently sitting in the queue pending execution, this new task is silently dropped. Excellent for preventing duplicate generative AI requests from trigger-happy users!
@@ -61,7 +61,7 @@ async def main():
     # 2. Register your background job logic
     queue.register_handler('send_email', send_email)
 
-    # 3. Enqueue a job from anywhere in your codebase (Now with v0.2.0 AI Features!)
+    # 3. Enqueue a job from anywhere in your codebase (Now with v0.2.1 AI Features!)
     await queue.enqueue(
         task_id='email-123',
         task_type='send_email',
@@ -82,6 +82,18 @@ if __name__ == "__main__":
         asyncio.run(main())
     except KeyboardInterrupt:
         print("Shutting down gracefully...")
+```
+
+### ☠️ Dead Letter Queue (Handling Permanent Failures)
+
+When a task fails repeatedly and exhausts its `maxRetries`, the SnerdMQ daemon permanently moves it to the Dead Letter Queue. You can hook into this event to alert your team, update your database, or send a Slack message by registering a Max Retry Handler.
+
+```python
+# 5. Catch tasks that have permanently failed (Dead Letter Queue)
+async def handle_failed_email(data):
+    print(f"Email task failed after all retries! Data: {data}")
+
+queue.register_max_retry_handler('send_email', handle_failed_email)
 ```
 
 ---

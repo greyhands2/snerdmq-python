@@ -14,6 +14,7 @@ _current_task_id = contextvars.ContextVar('current_task_id', default=None)
 class SnerdQueue:
     def __init__(self, binary_path: Optional[str] = None, storage_path: Optional[str] = None):
         self.handlers: Dict[str, Callable[[Any], Awaitable[None]]] = {}
+        self.max_retry_handlers: Dict[str, Callable[[Any], Awaitable[None]]] = {}
         self.process: Optional[asyncio.subprocess.Process] = None
         self.is_shutting_down = False
         self.pending_enqueues: Dict[str, asyncio.Future] = {}
@@ -134,7 +135,22 @@ class SnerdQueue:
                     self.progress_listeners.discard(ws)
 
         elif msg.get('action') == 'max_retries_reached':
-            print(f"[Snerd] Dead Letter Queue: Task {msg.get('task_id')} ({msg.get('task_type')}) permanently failed.", file=sys.stderr)
+            task_type = msg.get('task_type')
+            task_id = msg.get('task_id')
+            handler = self.max_retry_handlers.get(task_type)
+            if handler:
+                task_data = msg.get('task_data')
+                if isinstance(task_data, str):
+                    try:
+                        task_data = json.loads(task_data)
+                    except json.JSONDecodeError:
+                        pass
+                try:
+                    await handler(task_data)
+                except Exception as e:
+                    print(f"[Snerd] Error in max retry handler for task {task_id}: {e}", file=sys.stderr)
+            else:
+                print(f"[Snerd] Dead Letter Queue: Task {task_id} ({task_type}) permanently failed.", file=sys.stderr)
 
     async def _send(self, msg: dict):
         if self.process and self.process.stdin and not self.is_shutting_down:
@@ -146,6 +162,10 @@ class SnerdQueue:
         self.handlers[task_type] = handler
         if self.process:
             asyncio.create_task(self._send({"action": "register", "task_type": task_type}))
+
+    def register_max_retry_handler(self, task_type: str, handler: Callable[[Any], Awaitable[None]]):
+        """Registers an async function to handle permanently failed tasks of a specific type."""
+        self.max_retry_handlers[task_type] = handler
 
     async def enqueue(self, task_id: str, task_type: str, data: Any, max_retries: int = 3, retry_after_hours: float = 0.0, rate_limit_group: Optional[str] = None, max_per_minute: Optional[int] = None, auto_dedupe: Optional[bool] = None, urgency_score: Optional[float] = None):
         """Enqueues a new background job."""
