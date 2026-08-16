@@ -56,11 +56,10 @@ class SnerdQueue:
         for task_type in self.handlers.keys():
             await self._send({"action": "register", "task_type": task_type})
 
-        # Run stdout and stderr readers concurrently
-        await asyncio.gather(
-            self._read_stdout(),
-            self._read_stderr()
-        )
+        # Run stdout and stderr readers concurrently as tasks
+        loop = asyncio.get_running_loop()
+        loop.create_task(self._read_stdout())
+        loop.create_task(self._read_stderr())
 
     async def _read_stdout(self):
         assert self.process and self.process.stdout
@@ -167,7 +166,7 @@ class SnerdQueue:
         """Registers an async function to handle permanently failed tasks of a specific type."""
         self.max_retry_handlers[task_type] = handler
 
-    async def enqueue(self, task_id: str, task_type: str, data: Any, max_retries: int = 3, retry_after_hours: float = 0.0, rate_limit_group: Optional[str] = None, max_per_minute: Optional[int] = None, auto_dedupe: Optional[bool] = None, urgency_score: Optional[float] = None, execute_at: Optional[str] = None, cron: Optional[str] = None):
+    async def enqueue(self, task_id: str, task_type: str, data: Any, max_retries: int = 3, retry_after_hours: float = 0.0, rate_limit_group: Optional[str] = None, max_per_minute: Optional[int] = None, auto_dedupe: Optional[bool] = None, urgency_score: Optional[float] = None, execute_at: Optional[str] = None, cron: Optional[str] = None, webhook_url: Optional[str] = None):
         """Enqueues a new background job."""
         if not self.process:
             raise RuntimeError("[Snerd] Cannot enqueue task: Queue is not running. Call start_listening() first.")
@@ -197,6 +196,8 @@ class SnerdQueue:
                 payload['execute_at'] = execute_at
         if cron is not None:
             payload['cron'] = cron
+        if webhook_url is not None:
+            payload['webhook_url'] = webhook_url
 
         loop = asyncio.get_running_loop()
         future = loop.create_future()
