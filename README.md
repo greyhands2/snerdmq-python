@@ -26,7 +26,11 @@ To power complex AI workflows, tasks can now be configured with advanced orchest
 * **`max_per_minute` (`int`)**: Used in conjunction with `rate_limit_group`. If the queue processes more tasks in this group than the allowed limit within a 60-second rolling window, further tasks in this group are temporarily paused. This natively prevents 429 "Too Many Requests" errors when bursting third-party APIs.
 * **`execute_at` (`str` | `datetime`)**: A timestamp of when the job should be executed in the future.
 * **`cron` (`str`)**: A cron expression (e.g. `"0 * * * *"`) for recurring jobs. Shorthands like `"2h"` or `"10m"` are also supported.
-* **`webhook_url` (`str`)**: By providing a webhook URL, SnerdMQ will completely bypass your local Python handlers and dispatch the task payload via an HTTP POST request directly to the specified URL.
+* **`webhook_url` (`str`)**: By providing a webhook URL, SnerdMQ will bypass your local Python async handlers and dispatch the task payload via an HTTP POST request directly to the specified URL.
+* **`max_execution_seconds` (`int`)**: Optional hard timeout in seconds. If execution takes longer, it's marked as failed.
+
+### Note on Hard Timeouts (`max_execution_seconds`)
+When `max_execution_seconds` is provided, the Python SDK wraps the execution of your async handler in `asyncio.wait_for`. If the task takes longer than the timeout, it will be cancelled via `asyncio.exceptions.TimeoutError` and marked as failed. The background Rust daemon also enforces this timeout at the IPC level.
 
 ### 🌐 HTTP Webhooks (Serverless Execution)
 You can configure a task to execute externally via an HTTP POST request. By setting a `webhook_url`, the internal background processor will skip any registered handlers (`queue.register_handler`) and directly invoke the HTTP endpoint.
@@ -82,12 +86,11 @@ async def main():
         data={'to': 'john@wick.com', 'subject': 'Continental Update'},
         max_retries=3,
         rate_limit_group='email_api',
-
-
         auto_dedupe=True,
         urgency_score=0.99,
-        cron="1h", # Runs every 1 hour!
-        webhook_url="https://api.example.com/webhook" # Execute via HTTP instead of local handlers
+        cron="1h",
+        webhook_url="https://api.example.com/webhook",
+        max_execution_seconds=300
     )
 
     # 4. Start the event loop (listens to the Rust daemon indefinitely)
