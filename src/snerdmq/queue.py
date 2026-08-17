@@ -106,6 +106,7 @@ class SnerdQueue:
             task_type = msg.get('task_type')
             task_id = msg.get('task_id')
             task_data = msg.get('task_data')
+            max_execution_seconds = msg.get('max_execution_seconds')
             
             if isinstance(task_data, str):
                 try:
@@ -120,8 +121,13 @@ class SnerdQueue:
 
             try:
                 _current_task_id.set(task_id)
-                await handler(task_data)
+                if max_execution_seconds is not None:
+                    await asyncio.wait_for(handler(task_data), timeout=max_execution_seconds)
+                else:
+                    await handler(task_data)
                 await self._send({'action': 'result', 'task_id': task_id, 'status': 'success'})
+            except asyncio.TimeoutError:
+                await self._send({'action': 'result', 'task_id': task_id, 'status': 'error', 'error_msg': f"Task execution timed out after {max_execution_seconds} seconds"})
             except Exception as e:
                 await self._send({'action': 'result', 'task_id': task_id, 'status': 'error', 'error_msg': str(e)})
 
@@ -166,7 +172,7 @@ class SnerdQueue:
         """Registers an async function to handle permanently failed tasks of a specific type."""
         self.max_retry_handlers[task_type] = handler
 
-    async def enqueue(self, task_id: str, task_type: str, data: Any, max_retries: int = 3, retry_after_hours: float = 0.0, rate_limit_group: Optional[str] = None, max_per_minute: Optional[int] = None, auto_dedupe: Optional[bool] = None, urgency_score: Optional[float] = None, execute_at: Optional[str] = None, cron: Optional[str] = None, webhook_url: Optional[str] = None):
+    async def enqueue(self, task_id: str, task_type: str, data: Any, max_retries: int = 3, retry_after_hours: float = 0.0, rate_limit_group: Optional[str] = None, max_per_minute: Optional[int] = None, auto_dedupe: Optional[bool] = None, urgency_score: Optional[float] = None, execute_at: Optional[str] = None, cron: Optional[str] = None, webhook_url: Optional[str] = None, max_execution_seconds: Optional[int] = None):
         """Enqueues a new background job."""
         if not self.process:
             raise RuntimeError("[Snerd] Cannot enqueue task: Queue is not running. Call start_listening() first.")
@@ -198,6 +204,8 @@ class SnerdQueue:
             payload['cron'] = cron
         if webhook_url is not None:
             payload['webhook_url'] = webhook_url
+        if max_execution_seconds is not None:
+            payload['max_execution_seconds'] = max_execution_seconds
 
         loop = asyncio.get_running_loop()
         future = loop.create_future()
