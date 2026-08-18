@@ -4,7 +4,7 @@ import urllib.request
 import stat
 import sys
 
-REPO = 'greyhands2/snerdmq'
+REPO = 'speed-nerd/snerdmq'
 VERSION = 'v0.1.1'
 
 def main():

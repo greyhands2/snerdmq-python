@@ -4,7 +4,7 @@
   <p>The official Python SDK for SnerdMQ. Execute robust, C-speed background jobs in Python without Redis, Celery, or complex config.</p>
 
   [![PyPI version](https://img.shields.io/pypi/v/snerdmq-python)](https://pypi.org/project/snerdmq-python)
-  [![License](https://img.shields.io/pypi/l/snerdmq-python)](https://github.com/greyhands2/snerdmq-python/blob/main/LICENSE)
+  [![License](https://img.shields.io/pypi/l/snerdmq-python)](https://github.com/speed-nerd/snerdmq-python/blob/main/LICENSE)
 </div>
 
 This is the official Python client for **SnerdMQ**. It acts as a lightweight, elegant wrapper over the underlying Rust background daemon. It handles all JSON-RPC communication, standard I/O piping, and event loop orchestration so you can write background jobs natively in Python using `asyncio`.
