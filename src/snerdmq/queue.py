@@ -159,8 +159,11 @@ class SnerdQueue:
 
     async def _send(self, msg: dict):
         if self.process and self.process.stdin and not self.is_shutting_down:
-            self.process.stdin.write((json.dumps(msg) + '\n').encode())
-            await self.process.stdin.drain()
+            try:
+                self.process.stdin.write((json.dumps(msg) + '\n').encode())
+                await self.process.stdin.drain()
+            except (BrokenPipeError, ConnectionResetError, OSError):
+                pass  # Daemon died, pipe broken — silently ignore
 
     def register_handler(self, task_type: str, handler: Callable[[Any], Awaitable[None]]):
         """Registers an async function to handle a specific task type."""
