@@ -13,6 +13,7 @@ This is the official Python client for **SnerdMQ**. It acts as a lightweight, el
 - **Smart API Rate-Limiting**: Natively tracks `rate_limit_group` execution velocity to prevent 429 "Too Many Requests" API errors.
 - **Payload-Hashing Deduplication**: Automatically computes cryptographic hashes to drop duplicate tasks instantly.
 - **Dynamic Float Prioritization**: A native Binary Max-Heap bypasses standard FIFO rules for high urgency tasks.
+- **Progress Streaming & Live Dashboard**: Handlers can stream progress updates to a built-in React UI dashboard served by the SDK.
 - **The Celery Killer**: No Redis, no RabbitMQ, no ports, no messy worker nodes. Just start enqueuing jobs.
 - **Zero Rust Required**: Our CLI tool automatically downloads the pre-compiled C-speed Rust binary for your OS.
 - **Native Asyncio**: Written to seamlessly integrate with modern Python `async/await` applications (like FastAPI or Sanic).
@@ -25,6 +26,7 @@ To power complex AI workflows, tasks can now be configured with advanced orchest
 * **`rate_limit_group` (`str`)**: A custom string (e.g. `"openai_api"` or `"db_writes"`) that groups tasks together for backpressure control.
 * **`max_per_minute` (`int`)**: Used in conjunction with `rate_limit_group`. If the queue processes more tasks in this group than the allowed limit within a 60-second rolling window, further tasks in this group are temporarily paused. This natively prevents 429 "Too Many Requests" errors when bursting third-party APIs.
 * **`execute_at` (`str` | `datetime`)**: A timestamp of when the job should be executed in the future.
+* **`retry_after_hours` (`float`)**: Backoff in **hours** before a failed job is retried (default `0.0`). See *Cron Jobs vs. Retryable Jobs* below.
 * **`cron` (`str`)**: A cron expression (e.g. `"0 * * * *"`) for recurring jobs. Shorthands like `"2h"` or `"10m"` are also supported.
 * **`webhook_url` (`str`)**: By providing a webhook URL, SnerdMQ will bypass your local Python async handlers and dispatch the task payload via an HTTP POST request directly to the specified URL.
 * **`max_execution_seconds` (`int`)**: Optional hard timeout in seconds. If execution takes longer, it's marked as failed.
@@ -79,18 +81,28 @@ async def main():
     # 2. Register your background job logic
     queue.register_handler('send_email', send_email)
 
-    # 3. Enqueue a job from anywhere in your codebase (Now with v0.2.1 AI Features!)
+    # 3. Enqueue a job from anywhere in your codebase
     await queue.enqueue(
         task_id='email-123',
         task_type='send_email',
         data={'to': 'john@wick.com', 'subject': 'Continental Update'},
         max_retries=3,
+        retry_after_hours=0.5,       # Wait 30 minutes before retrying a failed job
         rate_limit_group='email_api',
-        auto_dedupe=True,
-        urgency_score=0.99,
-        cron="1h",
-        webhook_url="https://api.example.com/webhook",
-        max_execution_seconds=300
+        max_per_minute=100,
+    )
+
+    # Need scheduling, deduplication, or serverless execution? All orchestration
+    # options are opt-in — combine only what you need:
+    await queue.enqueue(
+        task_id='email-digest-1',
+        task_type='send_email',
+        data={'to': 'john@wick.com', 'subject': 'Daily Digest'},
+        cron='0 8 * * *',            # Run every day at 08:00
+        auto_dedupe=True,            # Drop identical pending payloads
+        urgency_score=0.99,          # Float to the front of the queue
+        webhook_url='https://api.example.com/webhook',  # Execute via HTTP instead of local handlers
+        max_execution_seconds=300,   # Hard timeout
     )
 
     # 4. Start the event loop (listens to the Rust daemon indefinitely)
@@ -106,7 +118,7 @@ if __name__ == "__main__":
 
 ### ☠️ Dead Letter Queue (Handling Permanent Failures)
 
-When a task fails repeatedly and exhausts its `maxRetries`, the SnerdMQ daemon permanently moves it to the Dead Letter Queue. You can hook into this event to alert your team, update your database, or send a Slack message by registering a Max Retry Handler.
+When a task fails repeatedly and exhausts its `max_retries`, the SnerdMQ daemon permanently moves it to the Dead Letter Queue. You can hook into this event to alert your team, update your database, or send a Slack message by registering a Max Retry Handler.
 
 ```python
 # 5. Catch tasks that have permanently failed (Dead Letter Queue)
@@ -115,6 +127,46 @@ async def handle_failed_email(data):
 
 queue.register_max_retry_handler('send_email', handle_failed_email)
 ```
+
+---
+
+## 📊 Live Dashboard
+
+SnerdMQ ships with a built-in **React UI dashboard** served directly by the SDK — no extra services or ports to manage in your infrastructure. It gives you a real-time window into your queue:
+
+- **Live stats**: total enqueued, processed, and failed jobs
+- **Recent Jobs table**: per-task status (`queued`, `active`, `completed`, `failed`, `dead_letter`), retry counts, and badges showing which features a task uses (cron / webhook / timeout)
+- **Real-time Progress Stream**: live output from `yield_progress` calls in your handlers
+
+```python
+queue = SnerdQueue()
+
+# Start the built-in dashboard on http://localhost:9090
+queue.start_dashboard(9090)
+
+# ... register handlers, start listening, enqueue jobs ...
+```
+
+Then open **http://localhost:9090** in your browser. The dashboard automatically falls back to HTTP polling if a WebSocket connection cannot be established, and it also exposes a small JSON API (`/api/stats`, `/api/tasks`, `/api/progress`) if you want to build your own tooling on top.
+
+> **Note:** `start_dashboard` only serves the UI — your jobs keep running whether or not the dashboard is open.
+
+---
+
+## 📡 Progress Reporting
+
+Long-running handlers can stream live updates to the Dashboard's Progress Stream (ideal for streaming LLM tokens or multi-step ETL work):
+
+```python
+async def generate_report(data):
+    for step in range(1, 11):
+        await do_work(step)
+        await queue.yield_progress_async(f"Step {step}/10 complete")
+
+queue.register_handler('generate_report', generate_report)
+```
+
+> There is also a fire-and-forget sync variant, `queue.yield_progress(...)`, which schedules the update on the running event loop. Both must be called **inside a task handler** so the SDK knows which job the update belongs to.
 
 ---
 

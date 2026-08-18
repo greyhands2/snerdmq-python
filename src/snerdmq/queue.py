@@ -225,19 +225,6 @@ class SnerdQueue:
                 pass
 
 
-    def yield_progress(self, data: Any):
-        """Yields a progress update for the currently executing task."""
-        task_id = _current_task_id.get()
-        if not task_id:
-            raise RuntimeError("[Snerd] yield_progress must be called within a task handler context.")
-        
-        # We can't easily make a sync network call if the process stdin writing is async.
-        # But wait, self._send is async. yield_progress should ideally be sync if users call it from sync code.
-        # However, SnerdQueue handlers are async: `Callable[[Any], Awaitable[None]]`.
-        # So we can just make yield_progress async.
-        # But wait! Node and Ruby are sync. Python can be async.
-        pass
-
     async def yield_progress_async(self, data: Any):
         task_id = _current_task_id.get()
         if not task_id:
@@ -277,10 +264,7 @@ class SnerdQueue:
             return ws
 
         async def handle_stats(request):
-            enqueued = 0
-            processed = 0
-            failed = 0
-            
+            tasks_map = {}
             storage_dir = self.storage_path or './.snerdata'
             tasks_file = os.path.join(storage_dir, 'tasks', 'tasks.log')
             if os.path.exists(tasks_file):
@@ -289,14 +273,20 @@ class SnerdQueue:
                         if not line.strip(): continue
                         try:
                             t = json.loads(line)
-                            enqueued += 1
-                            if t.get('deletedAt'):
-                                if t.get('lastJobError'):
-                                    failed += 1
-                                else:
-                                    processed += 1
+                            if 'taskId' in t:
+                                tasks_map[t['taskId']] = t
                         except json.JSONDecodeError:
                             pass
+            enqueued = 0
+            processed = 0
+            failed = 0
+            for t in tasks_map.values():
+                enqueued += 1
+                if t.get('deletedAt'):
+                    if t.get('LastJobError'):
+                        failed += 1
+                    else:
+                        processed += 1
             return web.json_response({'enqueued': enqueued, 'processed': processed, 'failed': failed}, headers={'Access-Control-Allow-Origin': '*'})
 
         async def handle_tasks(request):
@@ -316,10 +306,24 @@ class SnerdQueue:
             
             res = []
             for t in tasks_map.values():
+                import time as _time
                 if t.get('deletedAt'):
-                    status = 'failed' if t.get('lastJobError') else 'completed'
+                    if t.get('LastJobError') and t.get('retryCount', 0) >= t.get('maxRetries', 3):
+                        status = 'dead_letter'
+                    elif t.get('LastJobError'):
+                        status = 'failed'
+                    else:
+                        status = 'completed'
+                elif t.get('LastJobError'):
+                    status = 'failed'
                 else:
-                    status = 'failed' if t.get('lastJobError') else 'queued'
+                    exec_at = t.get('executeAt', '')
+                    try:
+                        from datetime import datetime, timezone
+                        exec_time = datetime.fromisoformat(exec_at.replace('Z', '+00:00')).timestamp()
+                        status = 'active' if exec_time <= _time.time() else 'queued'
+                    except (ValueError, AttributeError):
+                        status = 'queued'
                 res.append({
                     'id': t['taskId'],
                     'type': t['taskType'],
@@ -327,7 +331,10 @@ class SnerdQueue:
                     'progress': 0,
                     'retryCount': t.get('retryCount', 0),
                     'maxRetries': t.get('maxRetries', 3),
-                    'retryAfterTime': t.get('retryAfterTime')
+                    'retryAfterTime': t.get('retryAfterTime'),
+                    'cronExpression': t.get('cronExpression'),
+                    'webhookUrl': t.get('webhookUrl'),
+                    'maxExecutionSeconds': t.get('maxExecutionSeconds')
                 })
             
             return web.json_response(res, headers={'Access-Control-Allow-Origin': '*'})
