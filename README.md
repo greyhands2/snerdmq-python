@@ -1,6 +1,6 @@
 <div align="center">
   <img src="./assets/Designer-9.png" height="120" alt="SnerdMQ Python Logo" />
-  <h1>🚀 SnerdMQ Python SDK v0.3.2</h1>
+  <h1>🚀 SnerdMQ Python SDK v0.3.3</h1>
   <p>The official Python SDK for SnerdMQ. Execute robust, C-speed background jobs in Python without Redis, Celery, or complex config.</p>
 
   [![PyPI version](https://img.shields.io/pypi/v/snerdmq-python)](https://pypi.org/project/snerdmq-python)
@@ -10,7 +10,7 @@
 
 This is the official Python client for **SnerdMQ**. It acts as a lightweight, elegant wrapper over the underlying Rust background daemon. It handles all JSON-RPC communication, standard I/O piping, and event loop orchestration so you can write background jobs natively in Python using `asyncio`.
 
-## ✨ v0.3.2 AI Features
+## ✨ v0.3.3 AI Features
 - **Smart API Rate-Limiting**: Natively tracks `rate_limit_group` execution velocity to prevent 429 "Too Many Requests" API errors.
 - **Payload-Hashing Deduplication**: Automatically computes cryptographic hashes to drop duplicate tasks instantly.
 - **Dynamic Float Prioritization**: A native Binary Max-Heap bypasses standard FIFO rules for high urgency tasks.
@@ -19,7 +19,7 @@ This is the official Python client for **SnerdMQ**. It acts as a lightweight, el
 - **Zero Rust Required**: Our CLI tool automatically downloads the pre-compiled C-speed Rust binary for your OS.
 - **Native Asyncio**: Written to seamlessly integrate with modern Python `async/await` applications (like FastAPI or Sanic).
 
-### ⚙️ Advanced Task Configuration (v0.3.2)
+### ⚙️ Advanced Task Configuration (v0.3.3)
 To power complex AI workflows, tasks can now be configured with advanced orchestration parameters:
 
 * **`auto_dedupe` (`bool`)**: If set to `True`, the daemon computes a cryptographic hash of the `task_type` and `data`. If an identical payload is currently sitting in the queue pending execution, this new task is silently dropped. Excellent for preventing duplicate generative AI requests from trigger-happy users!
@@ -171,18 +171,83 @@ queue.register_handler('generate_report', generate_report)
 
 ---
 
+## 🧩 Queue Topology: One Queue or Many?
+
+### ✅ Recommended: one queue, all job types (singleton)
+
+Each `SnerdQueue` client spawns its own Rust daemon and **exclusively owns** its storage directory (`.snerdata` by default). The recommended pattern is **one client per application process**: register every job type on it and serve a single shared dashboard:
+
+```python
+import asyncio
+from snerdmq import SnerdQueue
+
+async def process_image(data):
+    print(f"Processing image: {data['image_id']}")
+
+async def send_otp_email(data):
+    print(f"Sending OTP to: {data['to']}")
+
+async def main():
+    # ONE queue client for the whole app
+    queue = SnerdQueue()
+
+    # Job type #1: image processing
+    queue.register_handler('process_image', process_image)
+
+    # Job type #2: OTP emails — same queue, same daemon
+    queue.register_handler('send_otp_email', send_otp_email)
+
+    await queue.start_listening()
+
+    # Both job types flow through the exact same queue
+    await queue.enqueue(task_id='img-1', task_type='process_image', data={'image_id': 'abc123'}, max_retries=3, retry_after_hours=0.5)
+    await queue.enqueue(task_id='otp-1', task_type='send_otp_email', data={'to': 'john@wick.com'}, max_retries=3, retry_after_hours=0.5)
+
+    # ONE dashboard shows every job type
+    queue.start_dashboard(8080)
+
+asyncio.run(main())
+```
+
+All job types share everything: the same persistent job log, retry/DLQ pipeline, rate-limit state, stats — and one dashboard at `http://localhost:8080` showing all of them.
+
+### 🚫 Same storage twice = fails fast
+
+The daemon takes an **exclusive OS-level lock** on its storage directory at startup. A second client on the same storage fails instead of silently double-executing your jobs:
+
+```python
+first = SnerdQueue()   # ✅ owns .snerdata
+second = SnerdQueue()  # ❌ daemon refuses to start:
+# "Another daemon is already running on storage '.snerdata'"
+```
+
+This applies across processes too — with **Gunicorn/Uvicorn multi-worker setups, every worker is a separate process** that spawns its own daemon, so each worker needs its own `storage_path` (or run a single dedicated worker process for jobs).
+
+### 🔀 Need multiple queues? Give each one its own storage
+
+```python
+images = SnerdQueue(storage_path='.snerdata-images')
+emails = SnerdQueue(storage_path='.snerdata-emails')
+
+images.start_dashboard(8080)  # separate dashboards, so separate ports
+emails.start_dashboard(8081)
+```
+
+Now you have two fully independent engines: separate job logs, separate rate-limit state, separate dashboards. Only split when you actually need isolation (different teams, different retention, independent monitoring) — otherwise the singleton is simpler and recommended.
+
+---
+
 ## 🌍 Advanced: Distributed Scaling
 
-By default, the SDK spins up the Rust daemon which writes the queue to a local file (`.snerdata/tasks/tasks.log`). 
-
-If you have multiple Python servers (like Gunicorn/Uvicorn workers) running behind a load balancer and want them to share the exact same queue, simply mount a **Shared Network Drive** (like AWS EFS or NFS) to all of your servers and pass the shared path into the `SnerdQueue` constructor:
+Because the daemon exclusively locks its storage directory, scaling horizontally means **one queue per server**, each with its own storage. Your load balancer routes requests across servers, and every server processes the jobs it enqueued:
 
 ```python
 from snerdmq import SnerdQueue
 
-# All 10 of your Python servers point to the exact same shared file!
-# SnerdMQ's native OS file-locking guarantees zero data corruption.
-queue = SnerdQueue(storage_path='/mnt/aws-efs-shared-drive/snerd_tasks.log')
+# Each server runs its own daemon on its own storage dir (local disk works fine)
+queue = SnerdQueue(storage_path='/var/data/snerd')  # per-server storage
 ```
+
+A shared network drive (AWS EFS or NFS) is still a good home for that storage when a single instance needs durable state — e.g. a container that restarts but must keep its queue. Native OS file locking (`flock`) keeps writes safe — no Redis required.
 
 *Built with ❤️ for John Wick tier engineering.*
