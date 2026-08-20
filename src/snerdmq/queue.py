@@ -17,6 +17,7 @@ class SnerdQueue:
         self.max_retry_handlers: Dict[str, Callable[[Any], Awaitable[None]]] = {}
         self.process: Optional[asyncio.subprocess.Process] = None
         self.is_shutting_down = False
+        self.engine_alive = False
         self.pending_enqueues: Dict[str, asyncio.Future] = {}
         self.progress_listeners = set()
         self.dashboard_runner = None
@@ -58,6 +59,7 @@ class SnerdQueue:
 
         # Run stdout and stderr readers concurrently as tasks
         loop = asyncio.get_running_loop()
+        self.engine_alive = True
         loop.create_task(self._read_stdout())
         loop.create_task(self._read_stderr())
 
@@ -80,6 +82,14 @@ class SnerdQueue:
 
         if not self.is_shutting_down:
             print("[Snerd] Engine process terminated unexpectedly.", file=sys.stderr)
+
+        # Engine is gone — it can never ack. Reject all pending enqueues
+        # so callers fail fast instead of awaiting forever.
+        self.engine_alive = False
+        for task_id, future in list(self.pending_enqueues.items()):
+            if not future.done():
+                future.set_exception(RuntimeError(f"[Snerd] Engine terminated before ack for task '{task_id}'"))
+            del self.pending_enqueues[task_id]
 
     async def _read_stderr(self):
         assert self.process and self.process.stderr
@@ -179,6 +189,8 @@ class SnerdQueue:
         """Enqueues a new background job."""
         if not self.process:
             raise RuntimeError("[Snerd] Cannot enqueue task: Queue is not running. Call start_listening() first.")
+        if not self.engine_alive:
+            raise RuntimeError("[Snerd] Cannot enqueue task: engine is not running.")
         
         payload = {
             'action': 'enqueue',
